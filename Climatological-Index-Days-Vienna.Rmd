@@ -1,0 +1,170 @@
+---
+title: "Climatological Index Days in Vienna, Austria"
+author: "Bernhard Piskernik"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(plotly)
+```
+
+# Load the data
+
+```{r}
+## will not work, because the csv is format is absolutely messed up
+
+#climate_data <- read_csv2('https://www.wien.gv.at/statistik/ogd/jahrbuch/klimaundwetter/tab_1.3.2_klimaundwetter_.csv')
+```
+
+```{r}
+read_file('https://www.wien.gv.at/statistik/ogd/jahrbuch/klimaundwetter/tab_1.3.2_klimaundwetter_.csv') %>%
+    # remove title line
+    str_remove('^.*\r\n') %>%
+    # remove footer lines
+    str_remove('Quelle(.|\n|\r)*') %>%
+    # remove weird reference to 2nd footer line
+    str_replace('\\s+\\(1\\)(.|\n|\r)*%', ';sun_percent') %>%
+    # switch decimal character
+    str_replace_all(',', '.') %>%
+    # use comma as separator
+    str_replace_all(';', ',') %>%
+    write_file('climate_data.csv')
+```
+
+
+
+```{r}
+climate_data <- read_csv('climate_data.csv', na='-') %>%
+    # translate to english
+    rename(
+        Year = Jahr
+        , `SummerDays` = Sommertage
+        , `FrostDays` = Frosttage
+        , `IceDays` = Eistage
+        , `HeatDays` = Hitzetage
+    ) %>%
+    mutate(
+        IceDays = -IceDays
+        , FrostDays = -FrostDays
+    )
+```
+
+```{r}
+climate_data
+```
+
+# Index days
+
+* Heat Days: days with a maximum temperature of 30 °C or more
+* Summer Days: days with a maximum temperature of 25 °C or more
+* Frost Days: days with a minimum temperature of -1 °C or less
+* Ice Days: days with a maximum temperature of 0 °C or less
+
+# Visualize the data
+
+## Area Chart
+
+```{r}
+fig <- plot_ly(
+    climate_data
+    , x = ~Year
+    , y = ~SummerDays
+    , name = 'Summer Days'
+    , type = 'scatter'
+    , mode = 'none'
+    , stackgroup = 'positive'
+    , fillcolor = 'orange'
+    )
+
+fig <- fig %>% add_trace(y = ~HeatDays, name = 'Heat Days', fillcolor = 'red')
+fig <- fig %>% add_trace(y = ~FrostDays, name = 'Frost Days', fillcolor = 'lightblue', stackgroup = "negative")
+fig <- fig %>% add_trace(y = ~IceDays, name = 'Ice Days', fillcolor = 'blue', stackgroup = "negative")
+
+fig <- fig %>% layout(
+    title = 'Climatological Index Days in Vienna, Austria, 1950-2023'
+    , xaxis = list(title = 'Year')
+    , yaxis = list(title = 'Number of Days')
+    , legend = list(x = 0.05, y = 0.95)
+    , hovermode = "x unified"
+    )
+
+fig 
+```
+
+
+```{r}
+api_create(fig, filename = 'climate_index_days_vienna', fileopt='overwrite')
+```
+
+## Regression
+
+```{r, warning=FALSE}
+fig <- climate_data %>%
+    select(Year:HeatDays) %>%
+    pivot_longer(cols = -Year, names_to = 'Index', values_to = 'Days') %>%
+    mutate(
+        Days = abs(Days)
+        , Index = recode(Index
+            , `SummerDays` = 'Summer Days'
+            , `FrostDays` = 'Frost Days'
+            , `IceDays` = 'Ice Days'
+            , `HeatDays` = 'Heat Days'
+            )
+        , Index = factor(Index, levels = c('Heat Days', 'Summer Days', 'Frost Days', 'Ice Days'))
+        ) %>%
+    ggplot(aes(x = Year, y = Days, color = Index)) +
+    geom_point(alpha=0.5) +
+    theme_minimal() +
+    geom_smooth(method = 'lm', se = FALSE) +
+    scale_color_manual(values = c('red', 'orange', 'lightblue', 'blue')) +
+    labs(
+        title = 'Climatological Index Days in Vienna, Austria, 1950-2023'
+        , x = 'Year'
+        , y = 'Number of Days'
+        , color = 'Index'
+    ) 
+    
+fig <- fig %>% ggplotly() 
+
+fig <- fig %>% layout(
+    legend = list(x = 0.45, y = 1)
+    )
+
+fig
+```
+
+```{r}
+api_create(fig, filename = 'climate_index_days_vienna_regression', fileopt='overwrite')
+```
+
+## get regression coefficients
+
+
+```{r}
+climate_data %>%
+    select(Year:HeatDays) %>%
+    pivot_longer(cols = -Year, names_to = 'Index', values_to = 'Days') %>%
+    mutate(
+        Days = abs(Days)
+        , Index = recode(Index
+            , `SummerDays` = 'Summer Days'
+            , `FrostDays` = 'Frost Days'
+            , `IceDays` = 'Ice Days'
+            , `HeatDays` = 'Heat Days'
+            )
+        , Index = factor(Index, levels = c('Heat Days', 'Summer Days', 'Frost Days', 'Ice Days'))
+        ) %>%
+    group_by(Index) %>%
+    summarise(
+        Intercept = lm(Days ~ Year)$coefficients[1]
+        , Slope = lm(Days ~ Year)$coefficients[2]
+        , p_value = summary(lm(Days ~ Year))$coefficients[2, 4]
+    ) 
+```
+
